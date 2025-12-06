@@ -1,3 +1,13 @@
-Flask==3.1.2
-pycryptodome==3.21.0
-cryptography==44.0.0
+# Secure Messaging App Dependencies
+# ICS344 Cryptography Project
+
+# Web Framework
+flask>=2.3.0
+
+# Cryptography Library (pyca/cryptography)
+# Provides AES, RSA, SHA-256, and other cryptographic primitives
+cryptography>=41.0.0
+
+# For HTTP requests (used in DoS attack simulation)
+requests>=2.31.0
+

@@ -1,726 +1,990 @@
 """
-Secure Messaging Application
-Flask-based web application demonstrating cryptographic principles:
-- AES-CBC encryption with PKCS#7 padding for confidentiality
-- RSA-2048 digital signatures for integrity and authentication
-- Defense against Replay, Message Injection, MITM, and DoS attacks
+================================================================================
+APP.PY - Flask Web Application for Secure Messaging
+================================================================================
+ICS344 Cryptography Project - Secure Messaging Application
+
+This Flask application provides:
+- A web interface for secure message exchange between Alice and Bob
+- Real-time cryptographic operation logs
+- Attack simulation endpoints for educational demonstration
+- Rate limiting to defend against DoS attacks
+
+SECURITY DEMONSTRATIONS:
+-----------------------
+1. CONFIDENTIALITY: AES-256-CBC encryption
+2. INTEGRITY: SHA-256 signatures
+3. AUTHENTICATION: RSA digital signatures
+4. AVAILABILITY: Rate limiting defense
+
+Author: ICS344 Project Team
+================================================================================
 """
 
-from flask import Flask, render_template, request, jsonify, session
+import os
 import json
 import time
-import os
+from datetime import datetime
+from collections import defaultdict
 from functools import wraps
+from flask import Flask, render_template, request, jsonify, session
 
-from crypto_utils import (
-    AESCipher, RSAKeyManager, RSASignature, 
-    SecureMessage, AttackSimulator, RateLimiter
-)
+from crypto_utils import CryptoManager, AttackSimulator, generate_user_keys
+
+# ============================================================================
+# FLASK APPLICATION SETUP
+# ============================================================================
 
 app = Flask(__name__)
-app.secret_key = os.urandom(32)  # Session encryption key
+app.secret_key = os.urandom(32)  # Random secret for session management
 
-# Request logging for security audit
-@app.before_request
-def log_request_info():
-    """Log incoming requests for security auditing"""
-    # Skip logging for static files and frequent endpoints
-    if request.path.startswith('/static') or request.path == '/api/logs' or request.path == '/api/rate-limit/status':
-        return
+# ============================================================================
+# GLOBAL STATE (In production, use a database!)
+# ============================================================================
+
+# Initialize cryptographic manager
+crypto_manager = CryptoManager()
+
+# Store for user keys (simulated "Public Key Directory")
+# In production, this would be a Certificate Authority or Key Server
+user_keys = {}
+
+# Store for exchanged messages
+message_store = []
+
+# Store for used nonces (replay attack prevention)
+used_nonces = set()
+
+# Store for captured payloads (for attack simulation)
+captured_payloads = {}
+
+# MITM attack state
+mitm_mode = {
+    'active': False,
+    'attacker_keys': None
+}
+
+# ============================================================================
+# RATE LIMITING (DoS DEFENSE)
+# ============================================================================
+
+class RateLimiter:
+    """
+    Simple rate limiter to prevent Denial of Service attacks.
     
-    # Log API requests
-    if request.path.startswith('/api/'):
-        pass  # Individual endpoints handle their own detailed logging
-
-# ==================== Global State ====================
-
-# Store users and their keys (in production, use a database)
-users = {}
-
-# Message storage
-messages = []
-
-# Secure message handler
-secure_message_handler = SecureMessage()
-
-# Rate limiter for DoS protection
-rate_limiter = RateLimiter(max_requests=20, window_seconds=60)
-
-# Action logs
-action_logs = []
-
-def add_log(action: str, user: str = None, details: str = None, level: str = "info", 
-            metadata: dict = None):
-    """Add an entry to the action log with terminal-style formatting"""
+    RATE LIMITING EXPLAINED:
+    -----------------------
+    Rate limiting restricts the number of requests a client can make
+    within a time window. This prevents:
     
-    # Generate unique log ID
-    log_id = f"LOG-{len(action_logs)+1:04d}"
+    1. DoS attacks: Single attacker flooding with requests
+    2. DDoS mitigation: Helps (but doesn't fully prevent) distributed attacks
+    3. Brute force: Slows down password guessing attempts
     
-    # Get process info
-    import socket
-    hostname = socket.gethostname()
+    ALGORITHM: Token Bucket
+    ----------------------
+    - Each IP has a "bucket" of tokens
+    - Each request consumes a token
+    - Tokens regenerate over time
+    - When bucket is empty, requests are rejected
     
-    log_entry = {
-        'id': log_id,
-        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-        'unix_time': time.time(),
-        'action': action,
-        'user': user if user else 'SYSTEM',
-        'details': details,
-        'level': level,  # info, warning, error, success, attack, crypto, network
-        'metadata': metadata or {},
-        'hostname': hostname,
-        'pid': os.getpid()
-    }
-    action_logs.append(log_entry)
-    # Keep only last 200 logs
-    if len(action_logs) > 200:
-        action_logs.pop(0)
-    return log_entry
+    CONFIGURATION:
+    - RATE_LIMIT: Max requests per window
+    - RATE_WINDOW: Time window in seconds
+    - BLOCK_DURATION: How long to block after limit exceeded
+    """
+    
+    def __init__(self, rate_limit=10, rate_window=60, block_duration=120):
+        """
+        Initialize rate limiter.
+        
+        Args:
+            rate_limit: Maximum requests allowed per window
+            rate_window: Time window in seconds
+            block_duration: How long to block IPs that exceed limit
+        """
+        self.rate_limit = rate_limit
+        self.rate_window = rate_window
+        self.block_duration = block_duration
+        
+        # Track requests per IP: {ip: [(timestamp1), (timestamp2), ...]}
+        self.request_log = defaultdict(list)
+        
+        # Track blocked IPs: {ip: unblock_timestamp}
+        self.blocked_ips = {}
+        
+        # Statistics for display
+        self.stats = {
+            'total_requests': 0,
+            'blocked_requests': 0,
+            'blocked_ips_count': 0
+        }
+    
+    def is_blocked(self, ip: str) -> bool:
+        """Check if an IP is currently blocked."""
+        if ip in self.blocked_ips:
+            if time.time() < self.blocked_ips[ip]:
+                return True
+            else:
+                # Unblock expired
+                del self.blocked_ips[ip]
+        return False
+    
+    def check_rate_limit(self, ip: str) -> dict:
+        """
+        Check if a request from an IP should be allowed.
+        
+        Returns:
+            Dictionary with:
+            - allowed: Boolean
+            - reason: String explaining the decision
+            - remaining: Requests remaining in window
+        """
+        current_time = time.time()
+        self.stats['total_requests'] += 1
+        
+        # Check if IP is blocked
+        if self.is_blocked(ip):
+            self.stats['blocked_requests'] += 1
+            remaining_block = int(self.blocked_ips[ip] - current_time)
+            return {
+                'allowed': False,
+                'reason': f'IP blocked for {remaining_block}s due to rate limit violation',
+                'remaining': 0,
+                'blocked': True
+            }
+        
+        # Clean old requests outside the window
+        window_start = current_time - self.rate_window
+        self.request_log[ip] = [
+            ts for ts in self.request_log[ip] 
+            if ts > window_start
+        ]
+        
+        # Check rate limit
+        request_count = len(self.request_log[ip])
+        
+        if request_count >= self.rate_limit:
+            # Block this IP
+            self.blocked_ips[ip] = current_time + self.block_duration
+            self.stats['blocked_ips_count'] += 1
+            self.stats['blocked_requests'] += 1
+            return {
+                'allowed': False,
+                'reason': f'Rate limit exceeded ({self.rate_limit} requests/{self.rate_window}s). Blocked for {self.block_duration}s',
+                'remaining': 0,
+                'blocked': True
+            }
+        
+        # Allow request and log it
+        self.request_log[ip].append(current_time)
+        remaining = self.rate_limit - request_count - 1
+        
+        return {
+            'allowed': True,
+            'reason': 'Request allowed',
+            'remaining': remaining,
+            'blocked': False
+        }
+    
+    def reset(self):
+        """Reset all rate limiting state (for demo purposes)."""
+        self.request_log.clear()
+        self.blocked_ips.clear()
+        self.stats = {
+            'total_requests': 0,
+            'blocked_requests': 0,
+            'blocked_ips_count': 0
+        }
+    
+    def get_stats(self) -> dict:
+        """Get current rate limiting statistics."""
+        return {
+            **self.stats,
+            'currently_blocked': list(self.blocked_ips.keys()),
+            'rate_limit': self.rate_limit,
+            'rate_window': self.rate_window,
+            'block_duration': self.block_duration
+        }
 
 
-# ==================== Rate Limiting Decorator ====================
+# Initialize rate limiter
+# 10 requests per 60 seconds, block for 120 seconds if exceeded
+rate_limiter = RateLimiter(rate_limit=10, rate_window=60, block_duration=120)
+
 
 def rate_limit_check(f):
-    """Decorator to check rate limits"""
+    """
+    Decorator to apply rate limiting to routes.
+    
+    Usage:
+        @app.route('/api/endpoint')
+        @rate_limit_check
+        def my_endpoint():
+            ...
+    """
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        client_id = request.remote_addr or 'unknown'
-        allowed, remaining, reset_time = rate_limiter.is_allowed(client_id)
+        ip = request.remote_addr or '127.0.0.1'
+        check = rate_limiter.check_rate_limit(ip)
         
-        if not allowed:
-            add_log("DoS Protection Triggered", client_id, 
-                   f"Rate limit exceeded. Reset in {reset_time}s", "attack",
-                   metadata={
-                       'attack_type': 'DoS/Rate Limit Violation',
-                       'client_ip': client_id,
-                       'reset_seconds': reset_time,
-                       'max_requests': rate_limiter.max_requests,
-                       'window': rate_limiter.window_seconds
-                   })
+        if not check['allowed']:
             return jsonify({
                 'success': False,
-                'error': f'Rate limit exceeded. Try again in {reset_time} seconds.',
-                'attack_detected': 'DoS',
-                'remaining_requests': 0
-            }), 429
+                'error': check['reason'],
+                'attack_detected': 'DOS_ATTACK',
+                'rate_limit_info': rate_limiter.get_stats()
+            }), 429  # 429 = Too Many Requests
         
-        response = f(*args, **kwargs)
-        return response
+        return f(*args, **kwargs)
     return decorated_function
 
 
-# ==================== Routes ====================
+# ============================================================================
+# INITIALIZATION
+# ============================================================================
+
+def initialize_keys():
+    """
+    Generate RSA key pairs for Alice and Bob on startup.
+    
+    This simulates the key distribution phase in a real PKI system.
+    In production:
+    - Keys would be generated on client devices
+    - Public keys would be certified by a CA
+    - Private keys would never leave the client
+    """
+    global user_keys
+    
+    print("[INIT] Generating RSA-2048 key pairs for Alice and Bob...")
+    user_keys = generate_user_keys(crypto_manager)
+    print("[INIT] ✓ Keys generated and stored in public directory")
+    
+    # Display public key fingerprints (first 32 chars of public key)
+    alice_fingerprint = user_keys['alice']['public_key'][27:59]
+    bob_fingerprint = user_keys['bob']['public_key'][27:59]
+    print(f"[INIT] Alice's public key fingerprint: {alice_fingerprint}...")
+    print(f"[INIT] Bob's public key fingerprint: {bob_fingerprint}...")
+
+
+# Initialize keys on module load
+initialize_keys()
+
+
+# ============================================================================
+# MAIN ROUTES
+# ============================================================================
 
 @app.route('/')
 def index():
-    """Main application page"""
+    """
+    Main dashboard page.
+    
+    Displays:
+    - Sender panel (Alice's view)
+    - Receiver panel (Bob's view)
+    - Cryptographic operation logs
+    - Attack simulation panel
+    """
     return render_template('index.html')
 
 
-@app.route('/api/generate-keys', methods=['POST'])
-@rate_limit_check
-def generate_keys():
-    """Generate RSA key pair for a user"""
-    data = request.get_json()
-    username = data.get('username', '').strip()
+@app.route('/api/keys', methods=['GET'])
+def get_public_keys():
+    """
+    Get public keys from the "Public Key Directory".
     
-    if not username:
-        return jsonify({'success': False, 'error': 'Username is required'}), 400
+    In a real system, this would be a Certificate Authority or
+    Key Distribution Center query.
     
-    if username in users:
-        return jsonify({'success': False, 'error': 'User already exists'}), 400
-    
-    # Generate RSA-2048 key pair
-    rsa_manager = RSAKeyManager(key_size=2048)
-    keys = rsa_manager.generate_keys()
-    
-    # Store user
-    users[username] = {
-        'private_key': keys['private_key'],
-        'public_key': keys['public_key'],
-        'created_at': time.time()
-    }
-    
-    add_log("Key Generation", username, "RSA-2048 key pair generated", "crypto",
-           metadata={
-               'algorithm': 'RSA',
-               'key_size': 2048,
-               'public_key_fingerprint': keys['public_key'][27:55] + '...',
-               'operation': 'KEY_PAIR_GENERATION'
-           })
+    MITM ATTACK VECTOR:
+    ------------------
+    If MITM mode is active, this returns the attacker's public key
+    instead of the real recipient's key, demonstrating the attack.
+    """
+    if mitm_mode['active'] and mitm_mode['attacker_keys']:
+        # MITM active - return Eve's key as "Bob's" key
+        return jsonify({
+            'alice_public_key': user_keys['alice']['public_key'],
+            'bob_public_key': mitm_mode['attacker_keys']['public_key'],  # Eve's key!
+            'mitm_active': True,
+            'warning': 'MITM ATTACK ACTIVE - Eve has substituted Bob\'s key!'
+        })
     
     return jsonify({
-        'success': True,
-        'username': username,
-        'public_key': keys['public_key'],
-        'private_key': keys['private_key'],
-        'message': f'RSA-2048 key pair generated for {username}'
+        'alice_public_key': user_keys['alice']['public_key'],
+        'bob_public_key': user_keys['bob']['public_key'],
+        'mitm_active': False
     })
 
 
-@app.route('/api/users', methods=['GET'])
-def get_users():
-    """Get list of registered users with their public keys"""
-    user_list = []
-    for username, data in users.items():
-        user_list.append({
-            'username': username,
-            'public_key': data['public_key']
-        })
-    return jsonify({'success': True, 'users': user_list})
+# ============================================================================
+# SECURE MESSAGING ROUTES
+# ============================================================================
 
-
-@app.route('/api/send-message', methods=['POST'])
+@app.route('/api/send', methods=['POST'])
 @rate_limit_check
 def send_message():
-    """Send an encrypted and signed message"""
-    data = request.get_json()
+    """
+    SENDER ENDPOINT - Alice sends a message to Bob.
     
-    sender = data.get('sender', '').strip()
-    recipient = data.get('recipient', '').strip()
-    plaintext = data.get('message', '').strip()
+    This endpoint:
+    1. Takes plaintext from Alice
+    2. Encrypts using the full secure workflow
+    3. Returns the encrypted payload and operation logs
     
-    # Validation
-    if not all([sender, recipient, plaintext]):
-        return jsonify({'success': False, 'error': 'Sender, recipient, and message are required'}), 400
-    
-    if sender not in users:
-        return jsonify({'success': False, 'error': f'Sender "{sender}" not registered'}), 400
-    
-    if recipient not in users:
-        return jsonify({'success': False, 'error': f'Recipient "{recipient}" not registered'}), 400
-    
+    The payload would be transmitted to Bob (simulated on the receiver endpoint).
+    """
     try:
-        # Create secure message
-        secure_msg = secure_message_handler.create_secure_message(
-            plaintext=plaintext,
-            sender_private_key=users[sender]['private_key'],
-            recipient_public_key=users[recipient]['public_key']
+        data = request.get_json()
+        plaintext = data.get('message', '')
+        
+        if not plaintext:
+            return jsonify({
+                'success': False,
+                'error': 'Message cannot be empty'
+            }), 400
+        
+        # Load sender's private key (Alice)
+        sender_private_key = crypto_manager.load_private_key(
+            user_keys['alice']['private_key']
         )
         
-        # Store message
-        message_record = {
-            'id': len(messages) + 1,
-            'sender': sender,
-            'recipient': recipient,
-            'secure_message': secure_msg,
-            'timestamp': time.time(),
-            'status': 'sent'
-        }
-        messages.append(message_record)
+        # Load receiver's public key (Bob)
+        # Note: In MITM mode, this might be Eve's key!
+        if mitm_mode['active'] and mitm_mode['attacker_keys']:
+            receiver_public_key = crypto_manager.load_public_key(
+                mitm_mode['attacker_keys']['public_key']
+            )
+            mitm_warning = "WARNING: Message encrypted with EVE'S public key (MITM active)!"
+        else:
+            receiver_public_key = crypto_manager.load_public_key(
+                user_keys['bob']['public_key']
+            )
+            mitm_warning = None
         
-        add_log("Message Sent", sender, 
-               f"Encrypted message to {recipient} (ID: {message_record['id']})", "crypto",
-               metadata={
-                   'message_id': message_record['id'],
-                   'recipient': recipient,
-                   'encryption': 'AES-256-CBC',
-                   'key_exchange': 'RSA-2048-OAEP',
-                   'signature': 'RSA-SHA256',
-                   'iv': secure_msg['iv'][:16] + '...',
-                   'nonce': secure_msg['nonce'],
-                   'ciphertext_length': len(secure_msg['ciphertext']),
-                   'operation': 'ENCRYPT_AND_SIGN'
-               })
+        # Create secure payload using the full workflow
+        result = crypto_manager.create_secure_payload(
+            plaintext=plaintext,
+            sender_private_key=sender_private_key,
+            receiver_public_key=receiver_public_key
+        )
+        
+        # Store payload for later retrieval/attacks
+        payload_id = f"msg_{int(time.time() * 1000)}"
+        captured_payloads[payload_id] = result['payload']
+        
+        # Store in message history
+        message_store.append({
+            'id': payload_id,
+            'sender': 'Alice',
+            'receiver': 'Bob',
+            'timestamp': datetime.now().isoformat(),
+            'payload': result['payload'],
+            'status': 'sent'
+        })
+        
+        logs = result['logs']
+        if mitm_warning:
+            logs.insert(0, f"[⚠️ MITM] {mitm_warning}")
         
         return jsonify({
             'success': True,
-            'message_id': message_record['id'],
-            'encrypted_data': {
-                'iv': secure_msg['iv'],
-                'ciphertext': secure_msg['ciphertext'],
-                'encrypted_aes_key': secure_msg['encrypted_aes_key'][:50] + '...',
-                'signature': secure_msg['signature'][:50] + '...',
-                'nonce': secure_msg['nonce'],
-                'timestamp': secure_msg['timestamp']
-            },
-            'details': {
-                'encryption': 'AES-256-CBC with PKCS#7 padding',
-                'key_exchange': 'RSA-2048 OAEP',
-                'signature': 'RSA-2048 with SHA-256'
-            }
+            'payload_id': payload_id,
+            'payload': result['payload'],
+            'logs': logs,
+            'session_key_hex': result['session_key_hex'],  # For educational display
+            'mitm_active': mitm_mode['active']
         })
         
     except Exception as e:
-        add_log("Encryption Error", sender, str(e), "error",
-               metadata={
-                   'operation': 'ENCRYPT_FAILURE',
-                   'sender': sender,
-                   'recipient': recipient,
-                   'error_type': type(e).__name__,
-                   'error_message': str(e)
-               })
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
-@app.route('/api/receive-message', methods=['POST'])
+@app.route('/api/receive', methods=['POST'])
 @rate_limit_check
 def receive_message():
-    """Receive and verify a message"""
-    data = request.get_json()
+    """
+    RECEIVER ENDPOINT - Bob receives and decrypts a message.
     
-    message_id = data.get('message_id')
-    recipient = data.get('recipient', '').strip()
-    
-    if not message_id or not recipient:
-        return jsonify({'success': False, 'error': 'Message ID and recipient are required'}), 400
-    
-    if recipient not in users:
-        return jsonify({'success': False, 'error': f'Recipient "{recipient}" not registered'}), 400
-    
-    # Find message
-    message_record = None
-    for msg in messages:
-        if msg['id'] == message_id:
-            message_record = msg
-            break
-    
-    if not message_record:
-        return jsonify({'success': False, 'error': 'Message not found'}), 404
-    
-    if message_record['recipient'] != recipient:
-        add_log("Unauthorized Access Attempt", recipient, 
-               f"Attempted to read message {message_id} intended for {message_record['recipient']}", "warning",
-               metadata={
-                   'attempted_action': 'READ_MESSAGE',
-                   'message_id': message_id,
-                   'actual_recipient': message_record['recipient'],
-                   'unauthorized_user': recipient,
-                   'client_ip': request.remote_addr,
-                   'status_code': 403
-               })
-        return jsonify({'success': False, 'error': 'Not authorized to read this message'}), 403
+    This endpoint:
+    1. Takes an encrypted payload
+    2. Verifies the signature
+    3. Checks for replay attacks
+    4. Decrypts the message
+    5. Returns the plaintext and operation logs
+    """
+    global used_nonces
     
     try:
-        # Verify and decrypt
-        result = secure_message_handler.verify_and_decrypt(
-            message=message_record['secure_message'],
-            sender_public_key=users[message_record['sender']]['public_key'],
-            recipient_private_key=users[recipient]['private_key']
+        data = request.get_json()
+        payload = data.get('payload', {})
+        
+        if not payload:
+            return jsonify({
+                'success': False,
+                'error': 'No payload provided'
+            }), 400
+        
+        # Load receiver's private key (Bob)
+        receiver_private_key = crypto_manager.load_private_key(
+            user_keys['bob']['private_key']
         )
         
-        if result['success']:
-            add_log("Message Received", recipient, 
-                   f"Decrypted message {message_id} from {message_record['sender']}", "success",
-                   metadata={
-                       'message_id': message_id,
-                       'sender': message_record['sender'],
-                       'signature_valid': result['security_checks']['signature_valid'],
-                       'replay_check': result['security_checks']['replay_check_passed'],
-                       'timestamp_valid': result['security_checks']['timestamp_valid'],
-                       'operation': 'VERIFY_AND_DECRYPT'
-                   })
-        else:
-            log_level = "attack" if result['errors'] else "warning"
-            add_log("Verification Failed", recipient, 
-                   '; '.join(result['errors']), log_level,
-                   metadata={
-                       'message_id': message_id,
-                       'sender': message_record['sender'],
-                       'security_checks': result['security_checks'],
-                       'errors': result['errors'],
-                       'operation': 'VERIFICATION_FAILURE'
-                   })
+        # Load sender's public key (Alice)
+        sender_public_key = crypto_manager.load_public_key(
+            user_keys['alice']['public_key']
+        )
         
-        return jsonify({
-            'success': result['success'],
-            'sender': message_record['sender'],
-            'plaintext': result['plaintext'],
-            'security_checks': result['security_checks'],
-            'warnings': result['warnings'],
-            'errors': result['errors']
-        })
+        # Process the received payload
+        result = crypto_manager.process_received_payload(
+            payload=payload,
+            receiver_private_key=receiver_private_key,
+            sender_public_key=sender_public_key,
+            replay_window=60,
+            used_nonces=used_nonces
+        )
+        
+        # Update message store
+        for msg in message_store:
+            if msg['payload'] == payload:
+                msg['status'] = 'received' if result['success'] else 'rejected'
+                msg['decrypted'] = result.get('plaintext', None)
+                break
+        
+        return jsonify(result)
         
     except Exception as e:
-        add_log("Decryption Error", recipient, str(e), "error",
-               metadata={
-                   'operation': 'DECRYPT_FAILURE',
-                   'message_id': message_id,
-                   'recipient': recipient,
-                   'error_type': type(e).__name__,
-                   'error_message': str(e)
-               })
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
-@app.route('/api/messages/<recipient>', methods=['GET'])
-def get_messages(recipient):
-    """Get all messages for a recipient"""
-    if recipient not in users:
-        return jsonify({'success': False, 'error': 'User not found'}), 404
-    
-    user_messages = []
-    for msg in messages:
-        if msg['recipient'] == recipient:
-            user_messages.append({
-                'id': msg['id'],
-                'sender': msg['sender'],
-                'timestamp': msg['timestamp'],
-                'status': msg['status']
-            })
-    
-    return jsonify({'success': True, 'messages': user_messages})
-
-
-# ==================== Attack Simulation Endpoints ====================
+# ============================================================================
+# ATTACK SIMULATION ROUTES
+# ============================================================================
 
 @app.route('/api/attack/replay', methods=['POST'])
 @rate_limit_check
-def simulate_replay():
-    """Simulate a replay attack"""
-    data = request.get_json()
-    message_id = data.get('message_id')
-    recipient = data.get('recipient', '').strip()
+def replay_attack():
+    """
+    REPLAY ATTACK SIMULATION
     
-    if not message_id or not recipient:
-        return jsonify({'success': False, 'error': 'Message ID and recipient required'}), 400
+    This endpoint demonstrates a replay attack by:
+    1. Taking a previously captured message payload
+    2. Resending it as if it were new
+    3. The receiver should reject it due to expired timestamp
     
-    # Find original message
-    message_record = None
-    for msg in messages:
-        if msg['id'] == message_id:
-            message_record = msg
-            break
-    
-    if not message_record:
-        return jsonify({'success': False, 'error': 'Original message not found'}), 404
-    
-    # Simulate replay attack
-    replayed_message = AttackSimulator.simulate_replay_attack(message_record['secure_message'])
-    
-    add_log("Replay Attack Simulated", "ATTACKER", 
-           f"Replaying message {message_id}", "attack",
-           metadata={
-               'attack_type': 'REPLAY_ATTACK',
-               'target_message_id': message_id,
-               'victim': recipient,
-               'original_sender': message_record['sender'],
-               'nonce': message_record['secure_message']['nonce'],
-               'original_timestamp': message_record['secure_message']['timestamp'],
-               'attack_vector': 'Captured message re-transmission'
-           })
-    
-    # Try to verify replayed message
-    result = secure_message_handler.verify_and_decrypt(
-        message=replayed_message,
-        sender_public_key=users[message_record['sender']]['public_key'],
-        recipient_private_key=users[recipient]['private_key']
-    )
-    
-    return jsonify({
-        'attack_type': 'Replay Attack',
-        'description': 'Attacker captured and re-sent a valid encrypted message',
-        'defense_mechanism': 'Nonce tracking - each message has a unique nonce that can only be used once',
-        'attack_detected': not result['security_checks']['replay_check_passed'],
-        'result': result
-    })
+    EDUCATIONAL PURPOSE:
+    -------------------
+    Shows why timestamps/nonces are crucial for preventing
+    attackers from re-using captured messages.
+    """
+    try:
+        data = request.get_json()
+        payload_id = data.get('payload_id')
+        
+        # Get the captured payload
+        if payload_id and payload_id in captured_payloads:
+            payload = captured_payloads[payload_id]
+        else:
+            # Use the most recent payload
+            if not captured_payloads:
+                return jsonify({
+                    'success': False,
+                    'error': 'No captured payloads available. Send a message first!'
+                }), 400
+            
+            payload_id = list(captured_payloads.keys())[-1]
+            payload = captured_payloads[payload_id]
+        
+        # Attempt to replay the message
+        attack_simulator = AttackSimulator(crypto_manager)
+        attack_result = attack_simulator.simulate_replay_attack(payload)
+        
+        # Try to process the replayed message
+        receiver_private_key = crypto_manager.load_private_key(
+            user_keys['bob']['private_key']
+        )
+        sender_public_key = crypto_manager.load_public_key(
+            user_keys['alice']['public_key']
+        )
+        
+        # Force timestamp check by using original timestamp
+        receive_result = crypto_manager.process_received_payload(
+            payload=attack_result['payload'],
+            receiver_private_key=receiver_private_key,
+            sender_public_key=sender_public_key,
+            replay_window=60,  # 60 second window
+            used_nonces=used_nonces
+        )
+        
+        return jsonify({
+            'attack_type': 'REPLAY_ATTACK',
+            'attack_description': attack_result['description'],
+            'original_timestamp': payload['timestamp'],
+            'current_time': time.time(),
+            'time_difference': time.time() - payload['timestamp'],
+            'receive_result': receive_result,
+            'defense_worked': not receive_result['success'],
+            'explanation': (
+                'The replay attack was BLOCKED because the timestamp is outside '
+                'the acceptable window (60 seconds). This demonstrates how '
+                'timestamps prevent replay attacks.'
+                if not receive_result['success']
+                else 'WARNING: Replay attack succeeded! The timestamp was still valid.'
+            )
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
 @app.route('/api/attack/injection', methods=['POST'])
 @rate_limit_check
-def simulate_injection():
-    """Simulate a message injection/tampering attack"""
-    data = request.get_json()
-    message_id = data.get('message_id')
-    recipient = data.get('recipient', '').strip()
+def injection_attack():
+    """
+    MESSAGE INJECTION ATTACK SIMULATION
     
-    if not message_id or not recipient:
-        return jsonify({'success': False, 'error': 'Message ID and recipient required'}), 400
+    This endpoint demonstrates a TRUE message injection attack:
     
-    # Find original message
-    message_record = None
-    for msg in messages:
-        if msg['id'] == message_id:
-            message_record = msg
-            break
+    ATTACK SCENARIO:
+    ---------------
+    The attacker (Mallory) wants to send a fake message to Bob that
+    appears to come from Alice. Mallory:
     
-    if not message_record:
-        return jsonify({'success': False, 'error': 'Original message not found'}), 404
+    1. Writes their own malicious message
+    2. Encrypts it using Bob's PUBLIC key (publicly available)
+    3. Tries to sign it, but doesn't have Alice's PRIVATE key
+    4. Creates a fake signature using their own key or random data
+    5. Sends the forged payload to Bob
     
-    # Simulate injection attack
-    tampered_message = AttackSimulator.simulate_message_injection(message_record['secure_message'])
+    DEFENSE:
+    -------
+    Bob verifies the signature using Alice's PUBLIC key.
+    Since Mallory signed with their own key (not Alice's private key),
+    the signature verification FAILS, and the message is rejected.
     
-    add_log("Message Injection Simulated", "ATTACKER", 
-           f"Tampering with message {message_id} in transit", "attack",
-           metadata={
-               'attack_type': 'MESSAGE_INJECTION',
-               'target_message_id': message_id,
-               'victim': recipient,
-               'scenario': 'Attacker intercepts message BEFORE delivery',
-               'original_ciphertext': message_record['secure_message']['ciphertext'][:20] + '...',
-               'tampered_ciphertext': tampered_message['ciphertext'][:20] + '...',
-               'original_nonce': message_record['secure_message']['nonce'][:16] + '...',
-               'attack_nonce': tampered_message['nonce'][:16] + '...',
-               'bytes_modified': '16-32 (bit flip attack)',
-               'attack_vector': 'Ciphertext modification in transit',
-               'expected_defense': 'Signature verification failure'
-           })
-    
-    # Try to verify tampered message
-    result = secure_message_handler.verify_and_decrypt(
-        message=tampered_message,
-        sender_public_key=users[message_record['sender']]['public_key'],
-        recipient_private_key=users[recipient]['private_key']
-    )
-    
-    return jsonify({
-        'attack_type': 'Message Injection / Ciphertext Tampering',
-        'description': 'Attacker modified the encrypted ciphertext in transit',
-        'defense_mechanism': 'RSA Digital Signature - any modification invalidates the signature',
-        'attack_detected': not result['security_checks']['signature_valid'],
-        'original_ciphertext': message_record['secure_message']['ciphertext'][:50] + '...',
-        'tampered_ciphertext': tampered_message['ciphertext'][:50] + '...',
-        'result': result
-    })
+    This demonstrates why digital signatures are essential for
+    AUTHENTICATION - proving who actually sent the message.
+    """
+    try:
+        data = request.get_json()
+        injected_message = data.get('message', 'URGENT: Send $10,000 to account 1234567890 immediately! - Alice')
+        
+        logs = []
+        logs.append("=" * 50)
+        logs.append("MESSAGE INJECTION ATTACK SIMULATION")
+        logs.append("=" * 50)
+        logs.append(f"[EVE] Eve wants to inject message: \"{injected_message}\"")
+        logs.append("[EVE] Eve will pretend to be Alice...")
+        
+        # Step 1: Attacker generates their own key pair (they don't have Alice's private key)
+        logs.append("[EVE] Generating Eve's own RSA key pair...")
+        attacker_private, attacker_public = crypto_manager.generate_rsa_keypair()
+        logs.append("[EVE] ✓ Eve's keys generated (NOT Alice's keys!)")
+        
+        # Step 2: Attacker gets Bob's public key (it's public, so anyone can get it)
+        logs.append("[EVE] Fetching Bob's public key from public directory...")
+        bob_public_key = crypto_manager.load_public_key(user_keys['bob']['public_key'])
+        logs.append("[EVE] ✓ Got Bob's public key (this is public information)")
+        
+        # Step 3: Attacker encrypts their malicious message for Bob
+        logs.append("[EVE] Encrypting malicious message with Bob's public key...")
+        
+        # Generate session key and IV (attacker can do this)
+        session_key = crypto_manager.generate_session_key()
+        iv = crypto_manager.generate_iv()
+        logs.append(f"[EVE] Generated fake session key: {session_key.hex()[:32]}...")
+        logs.append(f"[EVE] Generated IV: {iv.hex()}")
+        
+        # Encrypt the malicious message
+        plaintext_bytes = injected_message.encode('utf-8')
+        ciphertext = crypto_manager.aes_encrypt(plaintext_bytes, session_key, iv)
+        logs.append(f"[EVE] Encrypted message: {ciphertext.hex()[:32]}...")
+        
+        # Encrypt session key with Bob's public key
+        encrypted_session_key = crypto_manager.rsa_encrypt(session_key, bob_public_key)
+        logs.append("[EVE] ✓ Session key encrypted with Bob's public key")
+        
+        # Step 4: Attacker tries to sign - but uses THEIR OWN private key (not Alice's!)
+        logs.append("[EVE] Attempting to sign message...")
+        logs.append("[EVE] ⚠ Problem: Eve doesn't have Alice's private key!")
+        logs.append("[EVE] ⚠ Eve will sign with her OWN private key instead...")
+        
+        # Sign with attacker's key (NOT Alice's key!)
+        fake_signature = crypto_manager.sign_message(ciphertext, attacker_private)
+        logs.append(f"[EVE] Created FAKE signature: {fake_signature.hex()[:32]}...")
+        logs.append("[EVE] ⚠ This signature was made with EVE's key, not Alice's!")
+        
+        # Step 5: Construct the forged payload
+        import base64
+        forged_payload = {
+            'encrypted_session_key': base64.b64encode(encrypted_session_key).decode('utf-8'),
+            'iv': base64.b64encode(iv).decode('utf-8'),
+            'ciphertext': base64.b64encode(ciphertext).decode('utf-8'),
+            'signature': base64.b64encode(fake_signature).decode('utf-8'),
+            'timestamp': time.time()  # Fresh timestamp
+        }
+        
+        logs.append("[EVE] ✓ Forged payload constructed")
+        logs.append("[EVE] Sending forged message to Bob...")
+        logs.append("")
+        logs.append("=" * 50)
+        logs.append("BOB RECEIVES THE FORGED MESSAGE")
+        logs.append("=" * 50)
+        
+        # Step 6: Bob tries to process the message
+        receiver_private_key = crypto_manager.load_private_key(user_keys['bob']['private_key'])
+        sender_public_key = crypto_manager.load_public_key(user_keys['alice']['public_key'])
+        
+        logs.append("[BOB] Received a message claiming to be from Alice...")
+        logs.append("[BOB] Step 1: Verifying signature with ALICE's public key...")
+        
+        # Verify signature - this should FAIL because it was signed with attacker's key
+        signature_valid = crypto_manager.verify_signature(
+            ciphertext, 
+            fake_signature, 
+            sender_public_key  # Alice's public key
+        )
+        
+        if signature_valid:
+            logs.append("[BOB] ✓ Signature valid")
+            defense_worked = False
+        else:
+            logs.append("[BOB] ❌ SIGNATURE VERIFICATION FAILED!")
+            logs.append("[BOB] The signature does not match Alice's public key!")
+            logs.append("[BOB] This message was NOT sent by Alice!")
+            logs.append("[BOB] REJECTING MESSAGE - Possible injection attack detected!")
+            defense_worked = True
+        
+        logs.append("")
+        logs.append("=" * 50)
+        logs.append("ATTACK RESULT")
+        logs.append("=" * 50)
+        
+        if defense_worked:
+            logs.append("[DEFENSE] ✓ MESSAGE INJECTION BLOCKED!")
+            logs.append("[DEFENSE] Bob correctly rejected the forged message.")
+            logs.append("[DEFENSE] The attacker could not impersonate Alice.")
+            logs.append("[REASON] Without Alice's private key, the attacker")
+            logs.append("         cannot create a valid signature that matches")
+            logs.append("         Alice's public key.")
+        else:
+            logs.append("[ATTACK] ⚠ MESSAGE INJECTION SUCCEEDED!")
+            logs.append("[ATTACK] This should NOT happen in a secure system!")
+        
+        return jsonify({
+            'attack_type': 'MESSAGE_INJECTION',
+            'attack_description': (
+                f'Eve crafted a fake message: "{injected_message}" '
+                'and tried to send it to Bob pretending to be Alice. '
+                'Eve encrypted it properly with Bob\'s public key, '
+                'but could NOT create a valid signature without Alice\'s private key.'
+            ),
+            'injected_message': injected_message,
+            'forged_payload': {
+                'ciphertext_preview': forged_payload['ciphertext'][:64] + '...',
+                'signature_preview': forged_payload['signature'][:64] + '...',
+                'timestamp': forged_payload['timestamp']
+            },
+            'signature_valid': signature_valid,
+            'defense_worked': defense_worked,
+            'logs': logs,
+            'explanation': (
+                'The injection attack was BLOCKED because the signature verification '
+                'failed. Eve does not have Alice\'s private key, '
+                'so she cannot create a signature that Bob can verify with Alice\'s '
+                'public key. This demonstrates how digital signatures provide '
+                'AUTHENTICATION - proving the message actually came from Alice.'
+                if defense_worked
+                else 'WARNING: Injection attack succeeded! This should not happen.'
+            )
+        })
+        
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
 
 
-@app.route('/api/attack/mitm', methods=['POST'])
-@rate_limit_check
-def simulate_mitm():
-    """Simulate a Man-in-the-Middle attack"""
-    data = request.get_json()
-    message_id = data.get('message_id')
-    recipient = data.get('recipient', '').strip()
+@app.route('/api/attack/mitm/enable', methods=['POST'])
+def enable_mitm():
+    """
+    ENABLE MAN-IN-THE-MIDDLE ATTACK MODE
     
-    if not message_id or not recipient:
-        return jsonify({'success': False, 'error': 'Message ID and recipient required'}), 400
+    This simulates an attacker who has compromised the public key
+    directory and substituted their own public key for Bob's.
     
-    # Find original message
-    message_record = None
-    for msg in messages:
-        if msg['id'] == message_id:
-            message_record = msg
-            break
-    
-    if not message_record:
-        return jsonify({'success': False, 'error': 'Original message not found'}), 404
+    When MITM is active:
+    - GET /api/keys returns the attacker's key as "Bob's" key
+    - Messages sent to "Bob" are actually encrypted with attacker's key
+    - Attacker can decrypt these messages
+    """
+    global mitm_mode
     
     # Generate attacker's key pair
-    attacker_keys = RSAKeyManager(key_size=2048)
-    attacker_keys.generate_keys()
+    attacker_private, attacker_public = crypto_manager.generate_rsa_keypair()
     
-    # Simulate MITM attack
-    mitm_message = AttackSimulator.simulate_mitm_attack(
-        message_record['secure_message'],
-        attacker_keys.private_key.export_key().decode('utf-8')
-    )
+    mitm_mode['active'] = True
+    mitm_mode['attacker_keys'] = {
+        'private_key': crypto_manager.serialize_private_key(attacker_private),
+        'public_key': crypto_manager.serialize_public_key(attacker_public)
+    }
     
-    add_log("MITM Attack Simulated", "ATTACKER", 
-           f"Intercepting and re-signing message {message_id} in transit", "attack",
-           metadata={
-               'attack_type': 'MAN_IN_THE_MIDDLE',
-               'target_message_id': message_id,
-               'victim': recipient,
-               'impersonated_sender': message_record['sender'],
-               'scenario': 'Attacker intercepts message BEFORE delivery',
-               'attacker_key_size': 2048,
-               'original_nonce': message_record['secure_message']['nonce'][:16] + '...',
-               'attack_nonce': mitm_message['nonce'][:16] + '...',
-               'original_signature': message_record['secure_message']['signature'][:30] + '...',
-               'forged_signature': mitm_message['signature'][:30] + '...',
-               'attack_vector': 'Signature forgery with attacker private key',
-               'expected_defense': 'Signature verification failure (wrong public key)'
-           })
-    
-    # Try to verify MITM message (should fail because signature doesn't match sender's public key)
-    result = secure_message_handler.verify_and_decrypt(
-        message=mitm_message,
-        sender_public_key=users[message_record['sender']]['public_key'],
-        recipient_private_key=users[recipient]['private_key']
-    )
-    
-    return jsonify({
-        'attack_type': 'Man-in-the-Middle (MITM)',
-        'description': 'Attacker intercepted the message and re-signed it with their own private key',
-        'defense_mechanism': 'RSA Digital Signature verification with trusted public key - signature must match known sender',
-        'attack_detected': not result['security_checks']['signature_valid'],
-        'explanation': 'The attacker\'s signature cannot be verified with the real sender\'s public key',
-        'result': result
-    })
-
-
-@app.route('/api/attack/dos', methods=['POST'])
-def simulate_dos():
-    """Simulate a Denial of Service attack"""
-    data = request.get_json()
-    num_requests = min(data.get('num_requests', 50), 100)  # Cap at 100
-    
-    add_log("DoS Attack Simulated", "ATTACKER", 
-           f"Flooding with {num_requests} requests", "attack",
-           metadata={
-               'attack_type': 'DENIAL_OF_SERVICE',
-               'flood_requests': num_requests,
-               'rate_limit_threshold': rate_limiter.max_requests,
-               'window_seconds': rate_limiter.window_seconds,
-               'attack_vector': 'Request flooding / Resource exhaustion'
-           })
-    
-    # Simulate rapid requests
-    attack_results = []
-    test_client_id = f"attacker_{time.time()}"
-    
-    for i in range(num_requests):
-        allowed, remaining, reset_time = rate_limiter.is_allowed(test_client_id)
-        attack_results.append({
-            'request_num': i + 1,
-            'allowed': allowed,
-            'remaining': remaining
-        })
-        if not allowed:
-            blocked_at = i + 1
-            break
-    else:
-        blocked_at = None
-    
-    return jsonify({
-        'attack_type': 'Denial of Service (DoS)',
-        'description': f'Attacker attempted to flood the server with {num_requests} rapid requests',
-        'defense_mechanism': 'Rate limiting - max 20 requests per 60 seconds per IP',
-        'attack_mitigated': blocked_at is not None,
-        'blocked_at_request': blocked_at,
-        'rate_limit_config': {
-            'max_requests': rate_limiter.max_requests,
-            'window_seconds': rate_limiter.window_seconds
-        },
-        'sample_results': attack_results[:25]  # Show first 25 results
-    })
-
-
-# ==================== Utility Endpoints ====================
-
-@app.route('/api/logs', methods=['GET'])
-def get_logs():
-    """Get action logs"""
     return jsonify({
         'success': True,
-        'logs': action_logs[-50:]  # Last 50 logs
+        'message': 'MITM attack enabled! Eve\'s key has replaced Bob\'s key in the directory.',
+        'attacker_public_key_preview': mitm_mode['attacker_keys']['public_key'][:100] + '...',
+        'original_bob_key_preview': user_keys['bob']['public_key'][:100] + '...',
+        'explanation': (
+            'Eve has substituted her public key for Bob\'s in the '
+            'public key directory. Any messages Alice sends to "Bob" will now '
+            'be encrypted with EVE\'s public key, allowing Eve '
+            'to decrypt them.'
+        )
     })
 
 
-@app.route('/api/logs/clear', methods=['POST'])
-def clear_logs():
-    """Clear action logs"""
-    action_logs.clear()
-    add_log("Logs Cleared", None, "All logs cleared", "info")
-    return jsonify({'success': True, 'message': 'Logs cleared'})
+@app.route('/api/attack/mitm/disable', methods=['POST'])
+def disable_mitm():
+    """Disable MITM attack mode and restore legitimate keys."""
+    global mitm_mode
+    
+    mitm_mode['active'] = False
+    mitm_mode['attacker_keys'] = None
+    
+    return jsonify({
+        'success': True,
+        'message': 'MITM attack disabled. Bob\'s legitimate key restored.'
+    })
 
 
-@app.route('/api/rate-limit/status', methods=['GET'])
-def rate_limit_status():
-    """Get current rate limit status"""
-    client_id = request.remote_addr or 'unknown'
-    status = rate_limiter.get_status(client_id)
-    return jsonify({'success': True, **status})
+@app.route('/api/attack/mitm/decrypt', methods=['POST'])
+@rate_limit_check
+def mitm_decrypt():
+    """
+    ATTACKER'S DECRYPTION - Demonstrates MITM attack success
+    
+    When MITM is active, messages sent to "Bob" are actually encrypted
+    with the attacker's public key. This endpoint shows the attacker
+    decrypting intercepted messages.
+    """
+    try:
+        if not mitm_mode['active'] or not mitm_mode['attacker_keys']:
+            return jsonify({
+                'success': False,
+                'error': 'MITM mode is not active. Enable it first!'
+            }), 400
+        
+        data = request.get_json()
+        payload = data.get('payload', {})
+        
+        if not payload:
+            return jsonify({
+                'success': False,
+                'error': 'No payload provided'
+            }), 400
+        
+        # Attacker attempts to decrypt with their private key
+        attacker_private_key = crypto_manager.load_private_key(
+            mitm_mode['attacker_keys']['private_key']
+        )
+        
+        # Note: Signature will fail because Alice signed with her key
+        # But attacker can still decrypt the session key and message!
+        
+        logs = []
+        logs.append("[EVE] Attempting to decrypt intercepted message...")
+        
+        try:
+            import base64
+            from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+            from cryptography.hazmat.primitives.padding import PKCS7
+            
+            # Decode payload
+            encrypted_session_key = base64.b64decode(payload['encrypted_session_key'])
+            iv = base64.b64decode(payload['iv'])
+            ciphertext = base64.b64decode(payload['ciphertext'])
+            
+            # Decrypt session key with attacker's private key
+            session_key = crypto_manager.rsa_decrypt(encrypted_session_key, attacker_private_key)
+            logs.append(f"[EVE] ✓ Decrypted session key: {session_key.hex()}")
+            
+            # Decrypt message
+            plaintext_bytes = crypto_manager.aes_decrypt(ciphertext, session_key, iv)
+            plaintext = plaintext_bytes.decode('utf-8')
+            logs.append(f"[EVE] ✓ Decrypted message: {plaintext}")
+            
+            return jsonify({
+                'success': True,
+                'attack_type': 'MITM_ATTACK',
+                'intercepted_message': plaintext,
+                'session_key': session_key.hex(),
+                'logs': logs,
+                'explanation': (
+                    'SUCCESS! Eve was able to decrypt the message because '
+                    'Alice unknowingly encrypted it with EVE\'s public key '
+                    '(which was substituted for Bob\'s key in the directory). '
+                    'This demonstrates why secure key exchange and certificate '
+                    'verification are crucial!'
+                )
+            })
+            
+        except Exception as e:
+            logs.append(f"[EVE] ✗ Decryption failed: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': f'Eve\'s decryption failed: {str(e)}',
+                'logs': logs,
+                'explanation': (
+                    'The message was not encrypted with Eve\'s key. '
+                    'Make sure MITM mode was active when the message was SENT.'
+                )
+            })
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/attack/dos/status', methods=['GET'])
+def dos_status():
+    """Get current DoS defense status and statistics."""
+    return jsonify({
+        'rate_limiter_stats': rate_limiter.get_stats(),
+        'your_ip': request.remote_addr or '127.0.0.1',
+        'explanation': (
+            f'Rate limit: {rate_limiter.rate_limit} requests per {rate_limiter.rate_window} seconds. '
+            f'Violators are blocked for {rate_limiter.block_duration} seconds.'
+        )
+    })
+
+
+@app.route('/api/attack/dos/reset', methods=['POST'])
+def dos_reset():
+    """Reset rate limiter state (for demo purposes)."""
+    rate_limiter.reset()
+    return jsonify({
+        'success': True,
+        'message': 'Rate limiter reset. All IPs unblocked.'
+    })
+
+
+@app.route('/api/attack/dos/test', methods=['POST'])
+@rate_limit_check
+def dos_test_endpoint():
+    """
+    DoS TEST ENDPOINT
+    
+    This endpoint is rate-limited. Use it to test the DoS defense
+    by making rapid requests.
+    """
+    ip = request.remote_addr or '127.0.0.1'
+    remaining = rate_limiter.rate_limit - len(rate_limiter.request_log.get(ip, []))
+    
+    return jsonify({
+        'success': True,
+        'message': 'Request successful',
+        'your_ip': ip,
+        'requests_remaining': remaining,
+        'rate_limit_stats': rate_limiter.get_stats()
+    })
+
+
+# ============================================================================
+# UTILITY ROUTES
+# ============================================================================
+
+@app.route('/api/messages', methods=['GET'])
+def get_messages():
+    """Get all exchanged messages (for display purposes)."""
+    return jsonify({
+        'messages': message_store,
+        'captured_payloads': list(captured_payloads.keys())
+    })
 
 
 @app.route('/api/reset', methods=['POST'])
-def reset_system():
-    """Reset the entire system (for demo purposes)"""
-    global users, messages, action_logs
-    users.clear()
-    messages.clear()
-    action_logs.clear()
-    secure_message_handler.clear_old_nonces()
+def reset_state():
+    """Reset all application state (for demo purposes)."""
+    global message_store, used_nonces, captured_payloads, mitm_mode
     
-    add_log("System Reset", "ADMIN", "Full system reset executed", "warning",
-           metadata={
-               'operation': 'SYSTEM_RESET',
-               'users_cleared': True,
-               'messages_cleared': True,
-               'logs_cleared': True,
-               'nonces_cleared': True,
-               'client_ip': request.remote_addr
-           })
+    message_store = []
+    used_nonces = set()
+    captured_payloads = {}
+    mitm_mode = {'active': False, 'attacker_keys': None}
+    rate_limiter.reset()
     
-    return jsonify({'success': True, 'message': 'System reset complete'})
-
-
-@app.route('/api/demo/setup', methods=['POST'])
-def setup_demo():
-    """Quick setup for demonstration"""
-    # Create two demo users
-    demo_users = ['Alice', 'Bob']
-    created = []
-    
-    for username in demo_users:
-        if username not in users:
-            rsa_manager = RSAKeyManager(key_size=2048)
-            keys = rsa_manager.generate_keys()
-            users[username] = {
-                'private_key': keys['private_key'],
-                'public_key': keys['public_key'],
-                'created_at': time.time()
-            }
-            created.append(username)
-            add_log("Demo Setup", username, "Demo user created with RSA-2048 key pair", "info",
-                   metadata={
-                       'operation': 'DEMO_USER_CREATION',
-                       'key_algorithm': 'RSA-2048',
-                       'public_key_preview': keys['public_key'][27:60] + '...'
-                   })
+    # Regenerate keys
+    initialize_keys()
     
     return jsonify({
         'success': True,
-        'message': f'Demo users created: {", ".join(created) if created else "Already exist"}',
-        'users': [{'username': u, 'public_key': users[u]['public_key'][:100] + '...'} for u in demo_users]
+        'message': 'All state reset. New keys generated.'
     })
 
 
-# ==================== Cryptographic Info Endpoint ====================
+# ============================================================================
+# ERROR HANDLERS
+# ============================================================================
 
-@app.route('/api/crypto-info', methods=['GET'])
-def crypto_info():
-    """Get information about cryptographic algorithms used"""
+@app.errorhandler(429)
+def ratelimit_error(e):
+    """Handle rate limit exceeded errors."""
     return jsonify({
-        'success': True,
-        'algorithms': {
-            'symmetric_encryption': {
-                'name': 'AES-256-CBC',
-                'key_size': '256 bits (32 bytes)',
-                'block_size': '128 bits (16 bytes)',
-                'padding': 'PKCS#7',
-                'mode': 'CBC (Cipher Block Chaining)',
-                'iv_size': '128 bits (16 bytes)',
-                'description': 'Provides confidentiality for message content'
-            },
-            'asymmetric_encryption': {
-                'name': 'RSA-2048',
-                'key_size': '2048 bits',
-                'padding': 'OAEP (Optimal Asymmetric Encryption Padding)',
-                'usage': 'Encrypting AES session keys for secure key exchange',
-                'description': 'Provides secure key distribution'
-            },
-            'digital_signature': {
-                'name': 'RSA with SHA-256',
-                'key_size': '2048 bits',
-                'hash_algorithm': 'SHA-256',
-                'signature_scheme': 'PKCS#1 v1.5',
-                'description': 'Provides integrity and authentication'
-            },
-            'hash_function': {
-                'name': 'SHA-256',
-                'output_size': '256 bits (32 bytes)',
-                'usage': 'Creating message digests for signing'
-            }
-        },
-        'security_features': {
-            'replay_protection': 'Nonce + Timestamp tracking',
-            'integrity': 'Digital signatures on entire payload',
-            'authentication': 'RSA signature verification with known public keys',
-            'confidentiality': 'AES-256 encryption with random session keys',
-            'dos_protection': 'Rate limiting (20 requests/minute)'
-        }
-    })
+        'success': False,
+        'error': 'Rate limit exceeded',
+        'attack_detected': 'DOS_ATTACK',
+        'message': str(e)
+    }), 429
 
+
+@app.errorhandler(500)
+def internal_error(e):
+    """Handle internal server errors."""
+    return jsonify({
+        'success': False,
+        'error': 'Internal server error',
+        'message': str(e)
+    }), 500
+
+
+# ============================================================================
+# MAIN ENTRY POINT
+# ============================================================================
 
 if __name__ == '__main__':
-    print("\n" + "="*60)
-    print("   SECURE MESSAGING APPLICATION")
-    print("   AES-CBC + RSA Digital Signatures")
-    print("="*60)
-    print("\n[*] Starting Flask server...")
-    print("[*] Access the application at: http://127.0.0.1:5000")
-    print("[*] Press Ctrl+C to stop the server\n")
+    print("\n" + "=" * 70)
+    print("SECURE MESSAGING APPLICATION")
+    print("ICS344 Cryptography Project")
+    print("=" * 70)
+    print("\n[INFO] Starting Flask server...")
+    print("[INFO] Access the dashboard at: http://127.0.0.1:5000")
+    print("[INFO] Rate limiting enabled: 10 requests/60s per IP")
+    print("\n[SECURITY FEATURES]")
+    print("  • AES-256-CBC encryption with PKCS#7 padding")
+    print("  • RSA-2048 key exchange and digital signatures")
+    print("  • Timestamp-based replay attack prevention")
+    print("  • Rate limiting for DoS protection")
+    print("\n[ATTACK SIMULATIONS]")
+    print("  • Replay Attack: /api/attack/replay")
+    print("  • Message Injection: /api/attack/injection")
+    print("  • Man-in-the-Middle: /api/attack/mitm/*")
+    print("  • DoS Test: /api/attack/dos/*")
+    print("\n" + "=" * 70 + "\n")
     
     app.run(debug=True, host='0.0.0.0', port=5000)
+
