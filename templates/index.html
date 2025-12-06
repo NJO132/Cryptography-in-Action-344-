@@ -3,13 +3,865 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Flask App</title>
+    <title>SecureVault - Encrypted Messaging</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="container">
-        <h1>Hello, Flask!</h1>
-        <p>Your Flask application is up and running.</p>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="logo">
+                <div class="logo-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                    </svg>
+                </div>
+                <span class="logo-text">SecureVault</span>
+            </div>
+            <div class="header-info">
+                <span class="crypto-badge">AES-256-CBC</span>
+                <span class="crypto-badge">RSA-2048</span>
+                <span class="crypto-badge">SHA-256</span>
+            </div>
+            <div class="header-actions">
+                <button class="btn btn-ghost" onclick="showCryptoInfo()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M12 16v-4M12 8h.01"/>
+                    </svg>
+                    Crypto Info
+                </button>
+                <button class="btn btn-ghost" onclick="setupDemo()">Quick Demo</button>
+                <button class="btn btn-danger-ghost" onclick="resetSystem()">Reset</button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Left Panel - User Management & Messaging -->
+            <div class="panel panel-left">
+                <!-- User Registration Section -->
+                <section class="card">
+                    <div class="card-header">
+                        <h2>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                                <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                                <circle cx="8.5" cy="7" r="4"/>
+                                <line x1="20" y1="8" x2="20" y2="14"/>
+                                <line x1="23" y1="11" x2="17" y2="11"/>
+                            </svg>
+                            User Registration
+                        </h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="input-group">
+                            <input type="text" id="newUsername" placeholder="Enter username" class="input">
+                            <button class="btn btn-primary" onclick="generateKeys()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                                    <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
+                                </svg>
+                                Generate Keys
+                            </button>
+                        </div>
+                        <div class="users-list" id="usersList">
+                            <p class="empty-state">No users registered yet</p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Send Message Section -->
+                <section class="card">
+                    <div class="card-header">
+                        <h2>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                                <line x1="22" y1="2" x2="11" y2="13"/>
+                                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                            </svg>
+                            Send Secure Message
+                        </h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Sender</label>
+                                <select id="senderSelect" class="input">
+                                    <option value="">Select sender...</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Recipient</label>
+                                <select id="recipientSelect" class="input">
+                                    <option value="">Select recipient...</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Message</label>
+                            <textarea id="messageInput" class="input textarea" placeholder="Type your secure message here..."></textarea>
+                        </div>
+                        <button class="btn btn-primary btn-full" onclick="sendMessage()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                            </svg>
+                            Encrypt & Send
+                        </button>
+                    </div>
+                </section>
+
+                <!-- Receive Message Section -->
+                <section class="card">
+                    <div class="card-header">
+                        <h2>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                                <polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/>
+                                <path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>
+                            </svg>
+                            Receive & Verify
+                        </h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Recipient</label>
+                                <select id="receiveAsSelect" class="input">
+                                    <option value="">Select user...</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Message ID</label>
+                                <input type="number" id="messageIdInput" class="input" placeholder="Message ID">
+                            </div>
+                        </div>
+                        <button class="btn btn-success btn-full" onclick="receiveMessage()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                                <polyline points="20 6 9 17 4 12"/>
+                            </svg>
+                            Verify & Decrypt
+                        </button>
+                        <div id="decryptedResult" class="result-box hidden"></div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Middle Panel - Attack Simulation -->
+            <div class="panel panel-middle">
+                <section class="card card-dark">
+                    <div class="card-header">
+                        <h2 class="text-danger">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                                <line x1="12" y1="9" x2="12" y2="13"/>
+                                <line x1="12" y1="17" x2="12.01" y2="17"/>
+                            </svg>
+                            Attack Simulation Lab
+                        </h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="attack-controls">
+                            <div class="form-group">
+                                <label>Target Message ID</label>
+                                <input type="number" id="attackMessageId" class="input input-dark" placeholder="Message ID to attack">
+                            </div>
+                            <div class="form-group">
+                                <label>Victim User</label>
+                                <select id="victimSelect" class="input input-dark">
+                                    <option value="">Select victim...</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="attack-buttons">
+                            <button class="btn btn-attack" onclick="simulateReplay()">
+                                <div class="attack-icon">↻</div>
+                                <div class="attack-info">
+                                    <span class="attack-name">Replay Attack</span>
+                                    <span class="attack-category">Confidentiality</span>
+                                </div>
+                            </button>
+                            
+                            <button class="btn btn-attack" onclick="simulateInjection()">
+                                <div class="attack-icon">⚡</div>
+                                <div class="attack-info">
+                                    <span class="attack-name">Message Injection</span>
+                                    <span class="attack-category">Integrity</span>
+                                </div>
+                            </button>
+                            
+                            <button class="btn btn-attack" onclick="simulateMITM()">
+                                <div class="attack-icon">👤</div>
+                                <div class="attack-info">
+                                    <span class="attack-name">MITM Attack</span>
+                                    <span class="attack-category">Authentication</span>
+                                </div>
+                            </button>
+                            
+                            <button class="btn btn-attack" onclick="simulateDoS()">
+                                <div class="attack-icon">🌊</div>
+                                <div class="attack-info">
+                                    <span class="attack-name">DoS Attack</span>
+                                    <span class="attack-category">Availability</span>
+                                </div>
+                            </button>
+                        </div>
+
+                        <div id="attackResult" class="attack-result hidden"></div>
+                    </div>
+                </section>
+
+                <!-- Encryption Details -->
+                <section class="card">
+                    <div class="card-header">
+                        <h2>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                <polyline points="14 2 14 8 20 8"/>
+                                <line x1="16" y1="13" x2="8" y2="13"/>
+                                <line x1="16" y1="17" x2="8" y2="17"/>
+                            </svg>
+                            Last Encryption Details
+                        </h2>
+                    </div>
+                    <div class="card-body">
+                        <div id="encryptionDetails" class="code-display">
+                            <p class="empty-state">Send a message to see encryption details</p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Right Panel - Logs -->
+            <div class="panel panel-right">
+                <section class="card card-full-height card-terminal">
+                    <div class="card-header card-header-terminal">
+                        <h2>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                                <polyline points="4 17 10 11 4 5"/>
+                                <line x1="12" y1="19" x2="20" y2="19"/>
+                            </svg>
+                            Security Terminal
+                        </h2>
+                        <div class="terminal-controls">
+                            <span class="terminal-dot dot-red"></span>
+                            <span class="terminal-dot dot-yellow"></span>
+                            <span class="terminal-dot dot-green"></span>
+                            <button class="btn btn-ghost btn-sm" onclick="clearLogs()">Clear</button>
+                        </div>
+                    </div>
+                    <div class="card-body logs-container">
+                        <div id="logsPanel" class="logs-panel">
+                            <div class="terminal-welcome">
+                                <div class="terminal-line">SecureVault Terminal v1.0.0</div>
+                                <div class="terminal-line">AES-256-CBC | RSA-2048 | SHA-256</div>
+                                <div class="terminal-line">─────────────────────────────────────</div>
+                                <div class="terminal-line dim">Waiting for activity...</div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+
+        <!-- Footer Status Bar -->
+        <footer class="status-bar">
+            <div class="status-item">
+                <span class="status-indicator status-ok"></span>
+                <span>System Active</span>
+            </div>
+            <div class="status-item" id="rateLimitStatus">
+                <span>Rate Limit: --/20 remaining</span>
+            </div>
+            <div class="status-item">
+                <span id="userCount">0</span> Users | <span id="messageCount">0</span> Messages
+            </div>
+        </footer>
     </div>
+
+    <!-- Modal for Crypto Info -->
+    <div id="cryptoModal" class="modal hidden">
+        <div class="modal-backdrop" onclick="closeCryptoModal()"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Cryptographic Algorithms</h2>
+                <button class="btn btn-ghost" onclick="closeCryptoModal()">×</button>
+            </div>
+            <div class="modal-body" id="cryptoModalBody">
+                Loading...
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Key Display -->
+    <div id="keyModal" class="modal hidden">
+        <div class="modal-backdrop" onclick="closeKeyModal()"></div>
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h2>🔐 RSA Key Pair Generated</h2>
+                <button class="btn btn-ghost" onclick="closeKeyModal()">×</button>
+            </div>
+            <div class="modal-body" id="keyModalBody">
+                Loading...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ==================== API Functions ====================
+
+        const API_BASE = '';
+
+        async function apiCall(endpoint, method = 'GET', data = null) {
+            const options = {
+                method,
+                headers: { 'Content-Type': 'application/json' }
+            };
+            if (data) options.body = JSON.stringify(data);
+            
+            const response = await fetch(API_BASE + endpoint, options);
+            return await response.json();
+        }
+
+        // ==================== User Management ====================
+
+        async function generateKeys() {
+            const username = document.getElementById('newUsername').value.trim();
+            if (!username) {
+                showNotification('Please enter a username', 'error');
+                return;
+            }
+
+            const result = await apiCall('/api/generate-keys', 'POST', { username });
+            
+            if (result.success) {
+                document.getElementById('newUsername').value = '';
+                showKeyModal(result);
+                refreshUsers();
+                refreshLogs();
+                showNotification(`Keys generated for ${username}`, 'success');
+            } else {
+                showNotification(result.error, 'error');
+            }
+        }
+
+        async function refreshUsers() {
+            const result = await apiCall('/api/users');
+            
+            if (result.success) {
+                const usersList = document.getElementById('usersList');
+                const users = result.users;
+                
+                document.getElementById('userCount').textContent = users.length;
+                
+                if (users.length === 0) {
+                    usersList.innerHTML = '<p class="empty-state">No users registered yet</p>';
+                } else {
+                    usersList.innerHTML = users.map(u => `
+                        <div class="user-item">
+                            <div class="user-avatar">${u.username[0].toUpperCase()}</div>
+                            <div class="user-info">
+                                <span class="user-name">${u.username}</span>
+                                <span class="user-key">${u.public_key.substring(27, 60)}...</span>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+                
+                // Update all select dropdowns
+                const options = '<option value="">Select...</option>' + 
+                    users.map(u => `<option value="${u.username}">${u.username}</option>`).join('');
+                
+                ['senderSelect', 'recipientSelect', 'receiveAsSelect', 'victimSelect'].forEach(id => {
+                    document.getElementById(id).innerHTML = options;
+                });
+            }
+        }
+
+        // ==================== Messaging ====================
+
+        async function sendMessage() {
+            const sender = document.getElementById('senderSelect').value;
+            const recipient = document.getElementById('recipientSelect').value;
+            const message = document.getElementById('messageInput').value.trim();
+
+            if (!sender || !recipient || !message) {
+                showNotification('Please fill all fields', 'error');
+                return;
+            }
+
+            const result = await apiCall('/api/send-message', 'POST', { sender, recipient, message });
+            
+            if (result.success) {
+                document.getElementById('messageInput').value = '';
+                showEncryptionDetails(result);
+                refreshLogs();
+                updateMessageCount();
+                showNotification(`Message #${result.message_id} sent successfully`, 'success');
+            } else {
+                showNotification(result.error, 'error');
+            }
+        }
+
+        async function receiveMessage() {
+            const recipient = document.getElementById('receiveAsSelect').value;
+            const messageId = parseInt(document.getElementById('messageIdInput').value);
+
+            if (!recipient || !messageId) {
+                showNotification('Please select recipient and enter message ID', 'error');
+                return;
+            }
+
+            const result = await apiCall('/api/receive-message', 'POST', { recipient, message_id: messageId });
+            const resultBox = document.getElementById('decryptedResult');
+            resultBox.classList.remove('hidden');
+            
+            if (result.success) {
+                resultBox.innerHTML = `
+                    <div class="result-success">
+                        <div class="result-header">
+                            <span class="result-icon">✓</span>
+                            <span>Message Verified & Decrypted</span>
+                        </div>
+                        <div class="result-sender">From: <strong>${result.sender}</strong></div>
+                        <div class="result-message">${escapeHtml(result.plaintext)}</div>
+                        <div class="security-checks">
+                            ${formatSecurityChecks(result.security_checks)}
+                        </div>
+                    </div>
+                `;
+            } else {
+                resultBox.innerHTML = `
+                    <div class="result-error">
+                        <div class="result-header">
+                            <span class="result-icon">✗</span>
+                            <span>Verification Failed</span>
+                        </div>
+                        <div class="error-messages">
+                            ${result.errors?.map(e => `<div class="error-item">⚠️ ${escapeHtml(e)}</div>`).join('') || ''}
+                        </div>
+                        ${result.security_checks ? `
+                            <div class="security-checks">
+                                ${formatSecurityChecks(result.security_checks)}
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }
+            refreshLogs();
+        }
+
+        async function updateMessageCount() {
+            // This is a simple way - in production you'd have a proper endpoint
+            const users = await apiCall('/api/users');
+            let total = 0;
+            if (users.success) {
+                for (const user of users.users) {
+                    const msgs = await apiCall(`/api/messages/${user.username}`);
+                    if (msgs.success) total += msgs.messages.length;
+                }
+            }
+            document.getElementById('messageCount').textContent = total;
+        }
+
+        // ==================== Attack Simulations ====================
+
+        async function simulateReplay() {
+            const messageId = parseInt(document.getElementById('attackMessageId').value);
+            const recipient = document.getElementById('victimSelect').value;
+
+            if (!messageId || !recipient) {
+                showNotification('Please enter message ID and select victim', 'error');
+                return;
+            }
+
+            const result = await apiCall('/api/attack/replay', 'POST', { message_id: messageId, recipient });
+            showAttackResult(result);
+            refreshLogs();
+        }
+
+        async function simulateInjection() {
+            const messageId = parseInt(document.getElementById('attackMessageId').value);
+            const recipient = document.getElementById('victimSelect').value;
+
+            if (!messageId || !recipient) {
+                showNotification('Please enter message ID and select victim', 'error');
+                return;
+            }
+
+            const result = await apiCall('/api/attack/injection', 'POST', { message_id: messageId, recipient });
+            showAttackResult(result);
+            refreshLogs();
+        }
+
+        async function simulateMITM() {
+            const messageId = parseInt(document.getElementById('attackMessageId').value);
+            const recipient = document.getElementById('victimSelect').value;
+
+            if (!messageId || !recipient) {
+                showNotification('Please enter message ID and select victim', 'error');
+                return;
+            }
+
+            const result = await apiCall('/api/attack/mitm', 'POST', { message_id: messageId, recipient });
+            showAttackResult(result);
+            refreshLogs();
+        }
+
+        async function simulateDoS() {
+            const result = await apiCall('/api/attack/dos', 'POST', { num_requests: 50 });
+            showAttackResult(result);
+            refreshLogs();
+            updateRateLimitStatus();
+        }
+
+        function showAttackResult(result) {
+            const container = document.getElementById('attackResult');
+            container.classList.remove('hidden');
+            
+            const detected = result.attack_detected || result.attack_mitigated;
+            
+            container.innerHTML = `
+                <div class="attack-result-card ${detected ? 'attack-blocked' : 'attack-success'}">
+                    <div class="attack-result-header">
+                        <span class="attack-result-icon">${detected ? '🛡️' : '💀'}</span>
+                        <span class="attack-result-title">${result.attack_type}</span>
+                    </div>
+                    <div class="attack-result-status ${detected ? 'status-blocked' : 'status-succeeded'}">
+                        ${detected ? 'ATTACK DETECTED & BLOCKED' : 'ATTACK SUCCEEDED (Defense Failed)'}
+                    </div>
+                    <div class="attack-result-desc">
+                        <strong>Attack:</strong> ${result.description}
+                    </div>
+                    <div class="attack-result-defense">
+                        <strong>Defense:</strong> ${result.defense_mechanism}
+                    </div>
+                    ${result.explanation ? `
+                        <div class="attack-result-explanation">
+                            <strong>Details:</strong> ${result.explanation}
+                        </div>
+                    ` : ''}
+                    ${result.result?.errors?.length ? `
+                        <div class="attack-errors">
+                            ${result.result.errors.map(e => `<div class="error-line">⚠️ ${escapeHtml(e)}</div>`).join('')}
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }
+
+        // ==================== Utility Functions ====================
+
+        function showEncryptionDetails(result) {
+            const container = document.getElementById('encryptionDetails');
+            const enc = result.encrypted_data;
+            const det = result.details;
+            
+            container.innerHTML = `
+                <div class="encryption-info">
+                    <div class="info-row">
+                        <span class="info-label">Message ID:</span>
+                        <span class="info-value">#${result.message_id}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Encryption:</span>
+                        <span class="info-value">${det.encryption}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Key Exchange:</span>
+                        <span class="info-value">${det.key_exchange}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Signature:</span>
+                        <span class="info-value">${det.signature}</span>
+                    </div>
+                    <div class="code-block">
+                        <div class="code-label">IV (Base64):</div>
+                        <code>${enc.iv}</code>
+                    </div>
+                    <div class="code-block">
+                        <div class="code-label">Ciphertext (truncated):</div>
+                        <code>${enc.ciphertext.substring(0, 64)}...</code>
+                    </div>
+                    <div class="code-block">
+                        <div class="code-label">Nonce:</div>
+                        <code>${enc.nonce}</code>
+                    </div>
+                    <div class="code-block">
+                        <div class="code-label">Timestamp:</div>
+                        <code>${new Date(enc.timestamp * 1000).toISOString()}</code>
+                    </div>
+                </div>
+            `;
+        }
+
+        function formatSecurityChecks(checks) {
+            return `
+                <div class="check-item ${checks.signature_valid ? 'check-pass' : 'check-fail'}">
+                    ${checks.signature_valid ? '✓' : '✗'} Signature Valid
+                </div>
+                <div class="check-item ${checks.replay_check_passed ? 'check-pass' : 'check-fail'}">
+                    ${checks.replay_check_passed ? '✓' : '✗'} Replay Check
+                </div>
+                <div class="check-item ${checks.timestamp_valid ? 'check-pass' : 'check-fail'}">
+                    ${checks.timestamp_valid ? '✓' : '✗'} Timestamp Valid
+                </div>
+                <div class="check-item ${checks.integrity_intact ? 'check-pass' : 'check-fail'}">
+                    ${checks.integrity_intact ? '✓' : '✗'} Integrity Intact
+                </div>
+            `;
+        }
+
+        async function refreshLogs() {
+            const result = await apiCall('/api/logs');
+            const logsPanel = document.getElementById('logsPanel');
+            
+            if (result.success && result.logs.length > 0) {
+                logsPanel.innerHTML = result.logs.reverse().map(log => formatTerminalLog(log)).join('');
+                // Auto-scroll to bottom
+                logsPanel.scrollTop = logsPanel.scrollHeight;
+            } else {
+                logsPanel.innerHTML = `
+                    <div class="terminal-welcome">
+                        <div class="terminal-line">SecureVault Terminal v1.0.0</div>
+                        <div class="terminal-line">AES-256-CBC | RSA-2048 | SHA-256</div>
+                        <div class="terminal-line">─────────────────────────────────────</div>
+                        <div class="terminal-line dim">Waiting for activity...</div>
+                    </div>
+                `;
+            }
+        }
+
+        function formatTerminalLog(log) {
+            const levelIcons = {
+                'info': 'ℹ',
+                'success': '✓',
+                'warning': '⚠',
+                'error': '✗',
+                'attack': '☠',
+                'crypto': '🔐',
+                'network': '⇄'
+            };
+            
+            const levelColors = {
+                'info': 'cyan',
+                'success': 'green',
+                'warning': 'yellow',
+                'error': 'red',
+                'attack': 'magenta',
+                'crypto': 'blue',
+                'network': 'cyan'
+            };
+
+            const icon = levelIcons[log.level] || '•';
+            const color = levelColors[log.level] || 'white';
+            
+            let metadataHtml = '';
+            if (log.metadata && Object.keys(log.metadata).length > 0) {
+                metadataHtml = `
+                    <div class="log-metadata">
+                        ${Object.entries(log.metadata).map(([key, value]) => {
+                            const displayValue = typeof value === 'object' ? JSON.stringify(value) : value;
+                            return `<div class="meta-line">    ├─ ${key}: <span class="meta-value">${escapeHtml(String(displayValue))}</span></div>`;
+                        }).join('')}
+                    </div>
+                `;
+            }
+
+            return `
+                <div class="terminal-entry terminal-${color}">
+                    <div class="terminal-header">
+                        <span class="term-prompt">┌──[</span><span class="term-id">${log.id || 'LOG'}</span><span class="term-prompt">]──[</span><span class="term-time">${log.timestamp}</span><span class="term-prompt">]──[</span><span class="term-host">${log.hostname || 'localhost'}:${log.pid || '0'}</span><span class="term-prompt">]</span>
+                    </div>
+                    <div class="terminal-body">
+                        <span class="term-prompt">│</span>
+                        <span class="term-icon term-${color}">${icon}</span>
+                        <span class="term-level">[${log.level.toUpperCase()}]</span>
+                        <span class="term-action">${log.action}</span>
+                        ${log.user ? `<span class="term-user">@${log.user}</span>` : ''}
+                    </div>
+                    ${log.details ? `
+                        <div class="terminal-details">
+                            <span class="term-prompt">│</span>
+                            <span class="term-details">${escapeHtml(log.details)}</span>
+                        </div>
+                    ` : ''}
+                    ${metadataHtml ? `
+                        <div class="terminal-meta-section">
+                            <span class="term-prompt">│</span>
+                            <span class="meta-header">── DETAILS ──</span>
+                            ${metadataHtml}
+                        </div>
+                    ` : ''}
+                    <div class="terminal-footer">
+                        <span class="term-prompt">└──────────────────────────────────────────────</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function clearLogs() {
+            await apiCall('/api/logs/clear', 'POST');
+            refreshLogs();
+        }
+
+        async function updateRateLimitStatus() {
+            const result = await apiCall('/api/rate-limit/status');
+            if (result.success) {
+                document.getElementById('rateLimitStatus').innerHTML = `
+                    <span>Rate Limit: ${result.remaining}/${result.max_requests} remaining</span>
+                `;
+            }
+        }
+
+        async function resetSystem() {
+            if (confirm('Are you sure you want to reset the entire system? All users and messages will be deleted.')) {
+                await apiCall('/api/reset', 'POST');
+                refreshUsers();
+                refreshLogs();
+                document.getElementById('encryptionDetails').innerHTML = '<p class="empty-state">Send a message to see encryption details</p>';
+                document.getElementById('decryptedResult').classList.add('hidden');
+                document.getElementById('attackResult').classList.add('hidden');
+                showNotification('System reset complete', 'info');
+            }
+        }
+
+        async function setupDemo() {
+            const result = await apiCall('/api/demo/setup', 'POST');
+            if (result.success) {
+                refreshUsers();
+                refreshLogs();
+                showNotification(result.message, 'success');
+            }
+        }
+
+        async function showCryptoInfo() {
+            const modal = document.getElementById('cryptoModal');
+            const body = document.getElementById('cryptoModalBody');
+            modal.classList.remove('hidden');
+            
+            const result = await apiCall('/api/crypto-info');
+            if (result.success) {
+                const alg = result.algorithms;
+                body.innerHTML = `
+                    <div class="crypto-section">
+                        <h3>🔒 Symmetric Encryption</h3>
+                        <div class="crypto-detail">
+                            <strong>${alg.symmetric_encryption.name}</strong>
+                            <ul>
+                                <li>Key Size: ${alg.symmetric_encryption.key_size}</li>
+                                <li>Block Size: ${alg.symmetric_encryption.block_size}</li>
+                                <li>Padding: ${alg.symmetric_encryption.padding}</li>
+                                <li>Mode: ${alg.symmetric_encryption.mode}</li>
+                                <li>IV Size: ${alg.symmetric_encryption.iv_size}</li>
+                            </ul>
+                            <p>${alg.symmetric_encryption.description}</p>
+                        </div>
+                    </div>
+                    <div class="crypto-section">
+                        <h3>🔑 Asymmetric Encryption (Key Exchange)</h3>
+                        <div class="crypto-detail">
+                            <strong>${alg.asymmetric_encryption.name}</strong>
+                            <ul>
+                                <li>Key Size: ${alg.asymmetric_encryption.key_size}</li>
+                                <li>Padding: ${alg.asymmetric_encryption.padding}</li>
+                                <li>Usage: ${alg.asymmetric_encryption.usage}</li>
+                            </ul>
+                            <p>${alg.asymmetric_encryption.description}</p>
+                        </div>
+                    </div>
+                    <div class="crypto-section">
+                        <h3>✍️ Digital Signature</h3>
+                        <div class="crypto-detail">
+                            <strong>${alg.digital_signature.name}</strong>
+                            <ul>
+                                <li>Key Size: ${alg.digital_signature.key_size}</li>
+                                <li>Hash: ${alg.digital_signature.hash_algorithm}</li>
+                                <li>Scheme: ${alg.digital_signature.signature_scheme}</li>
+                            </ul>
+                            <p>${alg.digital_signature.description}</p>
+                        </div>
+                    </div>
+                    <div class="crypto-section">
+                        <h3>🛡️ Security Features</h3>
+                        <div class="crypto-detail">
+                            <ul>
+                                <li><strong>Replay Protection:</strong> ${result.security_features.replay_protection}</li>
+                                <li><strong>Integrity:</strong> ${result.security_features.integrity}</li>
+                                <li><strong>Authentication:</strong> ${result.security_features.authentication}</li>
+                                <li><strong>Confidentiality:</strong> ${result.security_features.confidentiality}</li>
+                                <li><strong>DoS Protection:</strong> ${result.security_features.dos_protection}</li>
+                            </ul>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        function closeCryptoModal() {
+            document.getElementById('cryptoModal').classList.add('hidden');
+        }
+
+        function showKeyModal(result) {
+            const modal = document.getElementById('keyModal');
+            const body = document.getElementById('keyModalBody');
+            modal.classList.remove('hidden');
+            
+            body.innerHTML = `
+                <div class="key-display">
+                    <p class="key-user">Keys generated for: <strong>${result.username}</strong></p>
+                    
+                    <div class="key-section">
+                        <h4>📤 Public Key (Share with others)</h4>
+                        <pre class="key-code">${result.public_key}</pre>
+                    </div>
+                    
+                    <div class="key-section key-private">
+                        <h4>🔐 Private Key (Keep secret!)</h4>
+                        <pre class="key-code">${result.private_key}</pre>
+                    </div>
+                    
+                    <p class="key-warning">⚠️ The private key is stored securely on the server for this demo. In a real application, it should be stored only on the user's device.</p>
+                </div>
+            `;
+        }
+
+        function closeKeyModal() {
+            document.getElementById('keyModal').classList.add('hidden');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function showNotification(message, type = 'info') {
+            const notification = document.createElement('div');
+            notification.className = `notification notification-${type}`;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+            
+            setTimeout(() => notification.classList.add('show'), 10);
+            setTimeout(() => {
+                notification.classList.remove('show');
+                setTimeout(() => notification.remove(), 300);
+            }, 3000);
+        }
+
+        // ==================== Initialization ====================
+
+        document.addEventListener('DOMContentLoaded', () => {
+            refreshUsers();
+            refreshLogs();
+            updateRateLimitStatus();
+            setInterval(updateRateLimitStatus, 10000);
+        });
+
+        // Enter key handlers
+        document.getElementById('newUsername').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') generateKeys();
+        });
+    </script>
 </body>
 </html>
