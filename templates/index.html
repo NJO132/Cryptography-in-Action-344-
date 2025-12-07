@@ -590,6 +590,12 @@
                     <!-- MITM Attack -->
                     <div class="attack-section">
                         <h4> Man-in-the-Middle</h4>
+                        <p id="mitm-hint" style="color: var(--accent-yellow);">
+                            ⚠️ Must be enabled <strong>BEFORE</strong> sending any message (at key exchange phase)
+                        </p>
+                        <p id="mitm-hint-disabled" style="display: none; color: var(--text-secondary);">
+                            🔒 Session established. MITM can only be enabled before key exchange. Reset to try again.
+                        </p>
 
                         <div class="d-flex gap-2 mb-2">
                             <button class="btn btn-danger flex-grow-1" onclick="enableMITM()" id="mitm-enable-btn">
@@ -669,6 +675,7 @@
         // State
         let currentPayload = null;
         let mitmActive = false;
+        let sessionEstablished = false;  // Tracks if any message has been sent
 
         // Logging
         function addLog(message, type = 'info') {
@@ -727,6 +734,17 @@
 
                 if (data.success) {
                     currentPayload = data.payload;
+                    
+                    // Mark session as established - MITM can no longer be enabled
+                    if (!sessionEstablished) {
+                        sessionEstablished = true;
+                        // Disable MITM enable button if not already active
+                        if (!mitmActive) {
+                            document.getElementById('mitm-enable-btn').disabled = true;
+                            document.getElementById('mitm-hint').style.display = 'none';
+                            document.getElementById('mitm-hint-disabled').style.display = 'block';
+                        }
+                    }
 
                     document.getElementById('payload-display').style.display = 'block';
                     document.getElementById('payload-session-key').textContent =
@@ -878,7 +896,7 @@
 
         // MITM Attack
         async function enableMITM() {
-            addLog('=== EVE: ENABLING MITM ===', 'warning');
+            addLog('=== EVE: ENABLING MITM AT KEY EXCHANGE ===', 'warning');
 
             try {
                 const response = await fetch('/api/attack/mitm/enable', {
@@ -895,13 +913,30 @@
                     document.getElementById('mitm-warning-sender').style.display = 'block';
                     document.getElementById('mitm-enable-btn').disabled = true;
                     document.getElementById('mitm-disable-btn').disabled = false;
+                    document.getElementById('mitm-hint').style.display = 'none';
 
                     const resultDiv = document.getElementById('mitm-result');
                     resultDiv.style.display = 'block';
                     resultDiv.className = 'result-box warning';
-                    resultDiv.innerHTML = ` Eve's key substituted for Bob's! Send a message now.`;
+                    resultDiv.innerHTML = ` Eve intercepted key exchange! Both Alice and Bob now have Eve's key. Send a message to see the attack.`;
 
-                    addLog('MITM enabled! Eve substituted her key.', 'error');
+                    addLog('MITM enabled at key exchange! Eve gave her key to BOTH parties.', 'error');
+                    addLog('Alice thinks she has Bob\'s key (actually Eve\'s)', 'warning');
+                    addLog('Bob thinks he has Alice\'s key (actually Eve\'s)', 'warning');
+                } else {
+                    // MITM failed - session already established
+                    sessionEstablished = true;
+                    document.getElementById('mitm-enable-btn').disabled = true;
+                    document.getElementById('mitm-hint').style.display = 'none';
+                    document.getElementById('mitm-hint-disabled').style.display = 'block';
+                    
+                    const resultDiv = document.getElementById('mitm-result');
+                    resultDiv.style.display = 'block';
+                    resultDiv.className = 'result-box error';
+                    resultDiv.innerHTML = ` ${data.error || 'MITM failed! Session already established.'}`;
+                    
+                    addLog('MITM FAILED: Session already established!', 'error');
+                    addLog('MITM only works BEFORE key exchange. Reset to try again.', 'info');
                 }
             } catch (error) {
                 addLog(`Error: ${error.message}`, 'error');
@@ -919,14 +954,24 @@
                 document.getElementById('mitm-status').className = 'status-indicator status-secure';
                 document.getElementById('mitm-status').innerHTML = ' SECURE';
                 document.getElementById('mitm-warning-sender').style.display = 'none';
-                document.getElementById('mitm-enable-btn').disabled = false;
                 document.getElementById('mitm-disable-btn').disabled = true;
                 document.getElementById('mitm-decrypt-btn').disabled = true;
                 document.getElementById('mitm-relay-btn').disabled = true;
                 currentInterceptId = null;
 
+                // Only re-enable MITM button if session hasn't been established yet
+                if (!sessionEstablished) {
+                    document.getElementById('mitm-enable-btn').disabled = false;
+                    document.getElementById('mitm-hint').style.display = 'block';
+                    document.getElementById('mitm-hint-disabled').style.display = 'none';
+                } else {
+                    document.getElementById('mitm-enable-btn').disabled = true;
+                    document.getElementById('mitm-hint').style.display = 'none';
+                    document.getElementById('mitm-hint-disabled').style.display = 'block';
+                }
+
                 document.getElementById('mitm-result').className = 'result-box success';
-                document.getElementById('mitm-result').innerHTML = ' MITM disabled. Bob\'s key restored.';
+                document.getElementById('mitm-result').innerHTML = ' MITM disabled. Legitimate keys restored.';
 
                 addLog('MITM disabled.', 'success');
             } catch (error) {
@@ -994,7 +1039,7 @@
                 if (data.success) {
                     currentPayload = data.payload;
                     resultDiv.className = 'result-box warning';
-                    resultDiv.innerHTML = ` Eve relayed message. Bob can now receive it, but signature will FAIL!`;
+                    resultDiv.innerHTML = ` Eve relayed message. Bob can now receive it!`;
                     addLog('Eve forwarded message to Bob (signature mismatch expected)', 'warning');
                     document.getElementById('receive-btn').disabled = false;
                 } else {
@@ -1062,6 +1107,7 @@
             currentPayload = null;
             mitmActive = false;
             currentInterceptId = null;
+            sessionEstablished = false;  // Reset session state
 
             document.getElementById('payload-display').style.display = 'none';
             document.getElementById('send-result').style.display = 'none';
@@ -1082,12 +1128,17 @@
             document.getElementById('mitm-status').className = 'status-indicator status-secure';
             document.getElementById('mitm-status').innerHTML = ' SECURE';
             document.getElementById('mitm-warning-sender').style.display = 'none';
+            
+            // Reset MITM hints
+            document.getElementById('mitm-hint').style.display = 'block';
+            document.getElementById('mitm-hint-disabled').style.display = 'none';
 
             document.getElementById('rate-limit-remaining').textContent = '10';
             document.getElementById('rate-limit-fill').style.width = '0%';
 
             clearLogs();
             addLog('System reset. New keys generated.', 'info');
+            addLog('MITM attack can now be enabled at key exchange phase.', 'info');
         }
     </script>
 </body>
