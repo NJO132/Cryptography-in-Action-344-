@@ -600,8 +600,11 @@
                                 Disable
                             </button>
                         </div>
-                        <button class="btn btn-warning w-100" onclick="mitmDecrypt()" id="mitm-decrypt-btn" disabled>
+                        <button class="btn btn-warning w-100 mb-2" onclick="mitmDecrypt()" id="mitm-decrypt-btn" disabled>
                             Eve Decrypts Intercepted Message
+                        </button>
+                        <button class="btn btn-warning w-100" onclick="mitmRelay()" id="mitm-relay-btn" disabled>
+                            Eve Relays to Bob
                         </button>
                         <div id="mitm-result" class="result-box" style="display: none;"></div>
                     </div>
@@ -919,6 +922,8 @@
                 document.getElementById('mitm-enable-btn').disabled = false;
                 document.getElementById('mitm-disable-btn').disabled = true;
                 document.getElementById('mitm-decrypt-btn').disabled = true;
+                document.getElementById('mitm-relay-btn').disabled = true;
+                currentInterceptId = null;
 
                 document.getElementById('mitm-result').className = 'result-box success';
                 document.getElementById('mitm-result').innerHTML = ' MITM disabled. Bob\'s key restored.';
@@ -928,6 +933,8 @@
                 addLog(`Error: ${error.message}`, 'error');
             }
         }
+
+        let currentInterceptId = null;
 
         async function mitmDecrypt() {
             if (!currentPayload) {
@@ -952,12 +959,47 @@
                 if (data.logs) addLogs(data.logs);
 
                 if (data.success) {
+                    currentInterceptId = data.intercept_id;
                     resultDiv.className = 'result-box error';
                     resultDiv.innerHTML = ` EVE READ: "${data.intercepted_message}"`;
                     addLog(`EVE DECRYPTED: "${data.intercepted_message}"`, 'error');
+                    document.getElementById('mitm-relay-btn').disabled = false;
                 } else {
                     resultDiv.className = 'result-box success';
                     resultDiv.innerHTML = ` Failed! Message wasn't encrypted with Eve's key.`;
+                }
+            } catch (error) {
+                resultDiv.className = 'result-box error';
+                resultDiv.innerHTML = `Error: ${error.message}`;
+            }
+        }
+
+        async function mitmRelay() {
+            addLog('Eve relaying message to Bob...', 'warning');
+
+            const resultDiv = document.getElementById('mitm-result');
+            resultDiv.className = 'result-box warning';
+            resultDiv.innerHTML = '<span class="spinner"></span> Eve relaying...';
+
+            try {
+                const response = await fetch('/api/attack/mitm/relay', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ intercept_id: currentInterceptId })
+                });
+
+                const data = await response.json();
+                if (data.logs) addLogs(data.logs);
+
+                if (data.success) {
+                    currentPayload = data.payload;
+                    resultDiv.className = 'result-box warning';
+                    resultDiv.innerHTML = ` Eve relayed message. Bob can now receive it, but signature will FAIL!`;
+                    addLog('Eve forwarded message to Bob (signature mismatch expected)', 'warning');
+                    document.getElementById('receive-btn').disabled = false;
+                } else {
+                    resultDiv.className = 'result-box error';
+                    resultDiv.innerHTML = ` Relay failed: ${data.error}`;
                 }
             } catch (error) {
                 resultDiv.className = 'result-box error';
@@ -1019,6 +1061,7 @@
 
             currentPayload = null;
             mitmActive = false;
+            currentInterceptId = null;
 
             document.getElementById('payload-display').style.display = 'none';
             document.getElementById('send-result').style.display = 'none';
@@ -1034,6 +1077,7 @@
             document.getElementById('mitm-enable-btn').disabled = false;
             document.getElementById('mitm-disable-btn').disabled = true;
             document.getElementById('mitm-decrypt-btn').disabled = true;
+            document.getElementById('mitm-relay-btn').disabled = true;
 
             document.getElementById('mitm-status').className = 'status-indicator status-secure';
             document.getElementById('mitm-status').innerHTML = ' SECURE';
