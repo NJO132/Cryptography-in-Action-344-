@@ -1,49 +1,3 @@
-#!/usr/bin/env python3
-"""
-================================================================================
-DOS_ATTACK.PY - Denial of Service Attack Simulation Script
-================================================================================
-ICS344 Cryptography Project - DoS Attack Demonstration
-
-This script simulates a Denial of Service (DoS) attack against the secure
-messaging application to demonstrate the effectiveness of rate limiting.
-
-DENIAL OF SERVICE ATTACK EXPLAINED:
-----------------------------------
-A DoS attack aims to make a service unavailable by overwhelming it with
-requests. Types of DoS attacks include:
-
-1. VOLUME-BASED ATTACKS:
-   - Flood the target with massive amounts of traffic
-   - Examples: UDP flood, ICMP flood
-   
-2. PROTOCOL ATTACKS:
-   - Exploit weaknesses in network protocols
-   - Examples: SYN flood, Ping of Death
-   
-3. APPLICATION LAYER ATTACKS:
-   - Target specific application vulnerabilities
-   - Examples: HTTP flood, Slowloris
-
-This script demonstrates an APPLICATION LAYER attack by sending
-rapid HTTP requests to exhaust the rate limit.
-
-DEFENSE MECHANISM:
------------------
-The server implements a RATE LIMITER that:
-- Allows 10 requests per 60-second window
-- Blocks IPs that exceed the limit for 120 seconds
-- Returns HTTP 429 (Too Many Requests) when blocked
-
-USAGE:
-------
-1. Start the Flask server: python app.py
-2. Run this script: python dos_attack.py
-3. Observe the rate limiting in action
-
-Author: ICS344 Project Team
-================================================================================
-"""
 
 import requests
 import time
@@ -51,9 +5,7 @@ import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
+
 
 TARGET_URL = "http://127.0.0.1:5000/api/attack/dos/test"
 RESET_URL = "http://127.0.0.1:5000/api/attack/dos/reset"
@@ -64,26 +16,16 @@ NUM_REQUESTS = 25  # Total requests to send
 DELAY_BETWEEN_REQUESTS = 0.1  # Seconds between requests (100ms)
 CONCURRENT_THREADS = 1  # Number of concurrent threads (1 = sequential attack)
 
-# ============================================================================
-# UTILITY FUNCTIONS
-# ============================================================================
 
 def print_banner():
     """Print the attack script banner."""
     print("""
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                                                                              ║
-║   ██████╗  ██████╗ ███████╗     █████╗ ████████╗████████╗ █████╗  ██████╗██╗ ║
-║   ██╔══██╗██╔═══██╗██╔════╝    ██╔══██╗╚══██╔══╝╚══██╔══╝██╔══██╗██╔════╝██║ ║
-║   ██║  ██║██║   ██║███████╗    ███████║   ██║      ██║   ███████║██║     ██╔╝║
-║   ██║  ██║██║   ██║╚════██║    ██╔══██║   ██║      ██║   ██╔══██║██║     ╚═╝ ║
-║   ██████╔╝╚██████╔╝███████║    ██║  ██║   ██║      ██║   ██║  ██║╚██████╗██╗ ║
-║   ╚═════╝  ╚═════╝ ╚══════╝    ╚═╝  ╚═╝   ╚═╝      ╚═╝   ╚═╝  ╚═╝ ╚═════╝╚═╝ ║
-║                                                                              ║
-║   ICS344 Cryptography Project - DoS Attack Simulation                        ║
-║   Educational Purpose Only - Do Not Use Maliciously!                         ║
-║                                                                              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+
+       
+       
+       
+             DOS Attack!!!!
+
     """)
 
 
@@ -112,9 +54,7 @@ def print_info(text):
     print_colored(f"[*] {text}", "96")
 
 
-# ============================================================================
-# ATTACK FUNCTIONS
-# ============================================================================
+
 
 def check_server():
     """Check if the server is running and accessible."""
@@ -155,12 +95,7 @@ def reset_rate_limiter():
 
 
 def send_attack_request(request_num):
-    """
-    Send a single attack request to the server.
-    
-    Returns:
-        dict: Result containing status, response time, and other info
-    """
+
     start_time = time.time()
     
     try:
@@ -220,8 +155,6 @@ def send_attack_request(request_num):
 def run_sequential_attack():
     """
     Run a sequential DoS attack (one request at a time).
-    
-    This demonstrates how even slow attacks trigger rate limiting.
     """
     print_info("Starting SEQUENTIAL DoS attack...")
     print_info(f"Target: {TARGET_URL}")
@@ -272,8 +205,6 @@ def run_sequential_attack():
 def run_burst_attack():
     """
     Run a burst DoS attack (multiple concurrent requests).
-    
-    This simulates a more aggressive attack pattern.
     """
     print_info("Starting BURST DoS attack...")
     print_info(f"Target: {TARGET_URL}")
@@ -356,10 +287,6 @@ def print_results(results, first_block_at, total_elapsed):
     print()
 
 
-# ============================================================================
-# MAIN FUNCTION
-# ============================================================================
-
 def main():
     """Main function to run the DoS attack simulation."""
     print_banner()
@@ -422,9 +349,6 @@ def main():
         print_success("Rate limiter reset!")
 
 
-# ============================================================================
-# ENTRY POINT
-# ============================================================================
 
 if __name__ == "__main__":
     try:
